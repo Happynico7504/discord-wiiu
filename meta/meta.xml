@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<app version="1">
+    <name>Discord Wii U</name>
+    <coder>Nico Christmann</coder>
+    <version>1.0.0</version>
+    <release_date>20260521193000</release_date>
+    <short_description>Discord client for Nintendo Wii U</short_description>
+    <long_description>
+        A Discord client for the Nintendo Wii U (Aroma homebrew).
+
+        Features:
+        - Real-time messaging via Discord Gateway WebSocket v10
+        - Server and channel list with permission filtering
+        - Message history with avatars, timestamps, and scroll
+        - @mention resolution and attachment display
+        - Typing indicators and Direct Messages
+        - On-screen touch keyboard (letters, numbers, symbols)
+        - Discord dark theme at 1280x720
+
+        Controls:
+        - D-Pad Up/Down: Navigate / scroll
+        - D-Pad Left/Right: Switch panels
+        - A: Select server or channel
+        - B: Go back
+        - Y: Open message input
+        - ZL/ZR: Scroll messages
+        - Minus (-): Open Direct Messages
+
+        Setup:
+        1. Place token in SD:/wiiu/discord_token.txt
+        2. Place a TTF font at SD:/wiiu/discord_wiiu/font.ttf
+        3. Launch from the Aroma Homebrew Launcher
+    </long_description>
+</app>

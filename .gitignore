@@ -1,0 +1,18 @@
+# Build output
+build/
+*.elf
+*.rpx
+*.wuhb
+*.map
+
+# SD card token — never commit credentials
+wiiu/discord_token.txt
+
+# Editor / OS
+.DS_Store
+.vscode/
+*.swp
+*.swo
+
+# Claude Code session data
+.claude/
