@@ -21,7 +21,13 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Wii U libraries
-        run: dkp-pacman -Syu --noconfirm wut wiiu-sdl2 wiiu-sdl2_ttf wiiu-curl wiiu-mbedtls wiiu-zlib
+        run: |
+          for i in 1 2 3; do
+            dkp-pacman -Syu --noconfirm wut wiiu-sdl2 wiiu-sdl2_ttf wiiu-curl wiiu-mbedtls wiiu-zlib && exit 0
+            echo "Attempt $i/3 failed — retrying in 30s..."
+            sleep 30
+          done
+          exit 1
 
       - name: Build
         run: make
