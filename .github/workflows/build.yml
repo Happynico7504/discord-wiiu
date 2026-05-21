@@ -1,0 +1,41 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write   # required to create GitHub Releases on version tags
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkitppc:latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Wii U libraries
+        run: dkp-pacman -Syu --noconfirm wut wiiu-sdl2 wiiu-sdl2_ttf wiiu-curl wiiu-mbedtls wiiu-zlib
+
+      - name: Build
+        run: make
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: discord-wiiu
+          path: discord-wiiu.wuhb
+          if-no-files-found: error
+
+      - name: Create release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: discord-wiiu.wuhb
+          fail_on_unmatched_files: true
