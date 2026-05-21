@@ -84,7 +84,7 @@ static int run_app() {
 int main(int argc, char **argv) {
     WHBProcInit();
     WHBLogUdpInit();
-    WHBLogPrint("Discord Wii U v1.0.0 starting");
+    WHBLogPrint("Discord Wii U v0.2.0 starting");
 
     // Network
     ACInitialize();

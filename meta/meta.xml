@@ -2,7 +2,7 @@
 <app version="1">
     <name>Discord Wii U</name>
     <coder>Nico Christmann</coder>
-    <version>1.0.0</version>
+    <version>0.2.0</version>
     <release_date>20260521193000</release_date>
     <short_description>Discord client for Nintendo Wii U</short_description>
     <long_description>
