@@ -408,7 +408,6 @@ static int safe_int(cJSON *j, const char *key, int def = 0) {
 
 // Forward declarations for file-local JSON parsers (defined at bottom of file)
 static User    parse_user(cJSON *j);
-static Guild   parse_guild(cJSON *j);
 static Message parse_message(cJSON *j);
 
 // ---- disk channel cache -------------------------------------------------
@@ -1135,16 +1134,45 @@ bool Client::fetch_guilds() {
     std::string json = rest_->get("/users/@me/guilds?with_counts=true");
     if (json.empty()) return false;
 
-    cJSON *arr = cJSON_Parse(json.c_str());
-    if (!arr || !cJSON_IsArray(arr)) { cJSON_Delete(arr); return false; }
+    // Raw array scanner — avoids cJSON/malloc on the main thread, which would
+    // race with the gateway recv thread's concurrent string allocations on
+    // newlib's non-thread-safe heap and cause heap corruption on exit.
+    const char *p   = json.c_str();
+    const char *end = p + json.size();
+    while (p < end && *p != '[') p++;
+    if (p >= end) return false;
+    p++;
+
+    std::vector<Guild> guilds;
+    while (p < end) {
+        while (p < end && (*p==' '||*p=='\t'||*p=='\r'||*p=='\n'||*p==',')) p++;
+        if (p >= end || *p == ']') break;
+        if (*p != '{') break;
+        const char *os = p;
+        int depth = 0; bool in_str = false;
+        while (p < end) {
+            char c = *p;
+            if (in_str) {
+                if (c=='\\') { p++; if (p<end) p++; continue; }
+                if (c=='"')  { in_str=false; p++; continue; }
+            } else {
+                if (c=='"')  { in_str=true;  p++; continue; }
+                if (c=='{')  { depth++; p++; continue; }
+                if (c=='}')  { depth--; p++; if (!depth) break; continue; }
+            }
+            p++;
+        }
+        const char *oe = p;
+        Guild g;
+        g.id        = json_str_field(os, oe, "id");
+        g.name      = json_str_field(os, oe, "name");
+        g.icon      = json_str_field(os, oe, "icon");
+        g.available = !json_bool_field(os, oe, "unavailable", false);
+        if (!g.id.empty()) guilds.push_back(std::move(g));
+    }
 
     std::lock_guard<std::mutex> lock(state_mutex_);
-    state_.guilds.clear();
-    cJSON *g;
-    cJSON_ArrayForEach(g, arr) {
-        state_.guilds.push_back(parse_guild(g));
-    }
-    cJSON_Delete(arr);
+    state_.guilds = std::move(guilds);
     return true;
 }
 
@@ -1237,16 +1265,28 @@ bool Client::fetch_messages(const std::string &channel_id, int limit) {
     return true;
 }
 
-bool Client::send_message(const std::string &channel_id, const std::string &content) {
-    cJSON *body = cJSON_CreateObject();
-    cJSON_AddStringToObject(body, "content", content.c_str());
-    char *json = cJSON_PrintUnformatted(body);
-    cJSON_Delete(body);
-    if (!json) return false;
+static std::string json_escape(const std::string &s) {
+    std::string out;
+    out.reserve(s.size() + 2);
+    for (unsigned char c : s) {
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if (c < 0x20) { char buf[8]; snprintf(buf, sizeof(buf), "\\u%04x", c); out += buf; }
+                else out += (char)c;
+        }
+    }
+    return out;
+}
 
+bool Client::send_message(const std::string &channel_id, const std::string &content) {
+    std::string body = "{\"content\":\"" + json_escape(content) + "\"}";
     std::string ep = "/channels/" + channel_id + "/messages";
-    std::string resp = rest_->post(ep, json);
-    cJSON_free(json);
+    rest_->post(ep, body.c_str());
     return rest_->last_http_code() == 200;
 }
 
@@ -1596,16 +1636,6 @@ static User parse_user(cJSON *j) {
     u.bot           = cJSON_IsTrue(cJSON_GetObjectItem(j, "bot"));
     return u;
 }
-
-static Guild parse_guild(cJSON *j) {
-    Guild g;
-    g.id        = safe_str(j, "id");
-    g.name      = safe_str(j, "name");
-    g.icon      = safe_str(j, "icon");
-    g.available = !cJSON_IsTrue(cJSON_GetObjectItem(j, "unavailable"));
-    return g;
-}
-
 
 static Message parse_message(cJSON *j) {
     Message m;
