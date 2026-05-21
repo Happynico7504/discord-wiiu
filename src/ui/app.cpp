@@ -644,7 +644,7 @@ void App::select_channel(int index) {
     msg_scroll_ = 0;
     bool is_heavy = (channels[index].type == Discord::ChannelType::GUILD_FORUM ||
                      channels[index].type == Discord::ChannelType::GUILD_MEDIA);
-    client_->request_messages(channels[index].id, is_heavy ? 10 : 50);
+    client_->request_messages(channels[index].id, is_heavy ? 50 : 100);
 }
 
 void App::open_dm_list() {
