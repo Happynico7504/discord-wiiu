@@ -12,10 +12,12 @@
 #include "renderer.h"
 #include "theme.h"
 #include "../discord/client.h"
+#include "../discord/remote_auth.h"
 
 namespace UI {
 
 enum class AppState {
+    LOGIN,
     LOADING,
     GUILD_LIST,
     CHANNEL_LIST,
@@ -30,12 +32,15 @@ public:
     ~App();
 
     void run();
+    std::shared_ptr<Discord::Client> get_client() const { return client_; }
 
 private:
     // -- lifecycle --
     bool setup_sdl();
     bool load_fonts(const char *font_path);
     void teardown();
+    void wire_callbacks();
+    static void save_token_to_disk(const std::string &token);
 
     // -- main loop --
     void update();
@@ -46,6 +51,7 @@ private:
     void handle_vpad();
 
     // -- per-state render --
+    void render_login();
     void render_loading();
     void render_guild_list();
     void render_channel_list();
@@ -83,7 +89,15 @@ private:
     Renderer      draw_;
 
     // Discord
-    std::shared_ptr<Discord::Client> client_;
+    std::shared_ptr<Discord::Client>        client_;
+    std::unique_ptr<Discord::RemoteAuth>    remote_auth_;
+
+    // QR code buffers for login screen (qrcodegen version ≤ 10 → 408 bytes each)
+    static constexpr int QR_BUF_LEN = 420;
+    uint8_t  qr_buf_[QR_BUF_LEN];
+    uint8_t  qr_tmp_[QR_BUF_LEN];
+    bool     qr_ok_          = false;
+    std::string qr_fingerprint_;  // fingerprint for which qr_buf_ was generated
 
     // State
     AppState state_       = AppState::LOADING;

@@ -15,7 +15,8 @@ BUILD         :=  build
 SOURCES       :=  src \
                   src/discord \
                   src/ui \
-                  vendor/cJSON
+                  vendor/cJSON \
+                  vendor/qrcodegen
 INCLUDES      :=  src vendor
 DATA          :=
 

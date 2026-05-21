@@ -18,6 +18,7 @@
 #include <iomanip>
 #include <vector>
 #include <sys/stat.h>
+#include <qrcodegen/qrcodegen.h>
 
 // Font search paths (SD card then romfs)
 static const char *FONT_PATHS[] = {
@@ -161,20 +162,39 @@ namespace UI {
 // ---- ctor/dtor ---------------------------------------------------------------
 
 App::App(std::shared_ptr<Discord::Client> client) : client_(client) {
-    // Wire Discord callbacks
+    if (client_) wire_callbacks();
+}
+
+void App::wire_callbacks() {
     client_->on_ready = [this]() {
         ready_ = true;
         state_ = AppState::GUILD_LIST;
         client_->fetch_guilds();
     };
     client_->on_message_create = [this](const Discord::Message &) {
-        // Scroll will stay at bottom only if user was already there
-        if (msg_scroll_ == 0) { /* already at bottom, nothing to do */ }
+        if (msg_scroll_ == 0) { /* already at bottom */ }
     };
     client_->on_typing_start = [this](const Discord::TypingEvent &ev) {
         if (ev.channel_id == client_->state().selected_channel_id)
             typing_users_[ev.user_id] = SDL_GetTicks() + 8000;
     };
+}
+
+void App::save_token_to_disk(const std::string &token) {
+    static const char *paths[] = {
+        "/vol/external01/wiiu/discord_token.txt",
+        "/vol/external01/discord_token.txt",
+        nullptr,
+    };
+    for (int i = 0; paths[i]; i++) {
+        FILE *f = fopen(paths[i], "w");
+        if (!f) continue;
+        fputs(token.c_str(), f);
+        fclose(f);
+        WHBLogPrintf("Token saved to %s", paths[i]);
+        return;
+    }
+    WHBLogPrint("WARNING: could not save token to SD card");
 }
 
 App::~App() { teardown(); }
@@ -214,6 +234,12 @@ bool App::load_fonts(const char *path) {
 }
 
 void App::teardown() {
+    // Stop login worker if still running
+    if (remote_auth_) {
+        remote_auth_->stop();
+        remote_auth_.reset();
+    }
+
     // Stop avatar worker first so it doesn't touch renderer during cleanup
     avatar_stop_.store(true);
     if (avatar_thread_.joinable()) avatar_thread_.join();
@@ -251,9 +277,19 @@ void App::teardown() {
 void App::run() {
     if (!setup_sdl()) return;
 
-    // Start background avatar download thread
-    avatar_stop_.store(false);
-    avatar_thread_ = std::thread(&App::avatar_worker, this);
+    // Start avatar worker only if we already have a Discord client
+    if (client_) {
+        avatar_stop_.store(false);
+        avatar_thread_ = std::thread(&App::avatar_worker, this);
+    }
+
+    // If no client provided, start Remote Auth login flow
+    if (!client_) {
+        state_ = AppState::LOGIN;
+        remote_auth_ = std::make_unique<Discord::RemoteAuth>();
+        remote_auth_->start();
+        WHBLogPrint("App: starting Remote Auth login");
+    }
 
     // Try each font path
     bool fonts_ok = false;
@@ -310,16 +346,47 @@ static void log_memory_stats() {
 }
 
 void App::update() {
-    // Drain Discord events
-    client_->poll();
+    // Handle Remote Auth login completion
+    if (state_ == AppState::LOGIN && remote_auth_) {
+        auto ra = remote_auth_->state();
+        if (ra == Discord::RemoteAuthState::DONE) {
+            std::string tok = remote_auth_->token();
+            remote_auth_->stop();
+            remote_auth_.reset();
+
+            save_token_to_disk(tok);
+
+            client_ = std::make_shared<Discord::Client>(tok);
+            wire_callbacks();
+
+            // Start avatar worker now that we have a client
+            avatar_stop_.store(false);
+            avatar_thread_ = std::thread(&App::avatar_worker, this);
+
+            if (!client_->init()) {
+                error_msg_ = "Discord init failed after login";
+                state_ = AppState::ERROR;
+            } else {
+                state_ = AppState::LOADING;
+            }
+        }
+        // In login state: only handle SDL events (for quit), skip Discord polls
+        handle_sdl_events();
+        return;
+    }
+
+    if (client_) {
+        // Drain Discord events
+        client_->poll();
+
+        // Apply background channel/message fetch results when ready
+        client_->drain_channel_result();
+        client_->drain_message_result();
+    }
 
     // Promote completed avatar/media downloads to GPU textures
     drain_avatar_results();
     drain_media_results();
-
-    // Apply background channel/message fetch results when ready
-    client_->drain_channel_result();
-    client_->drain_message_result();
 
     // Log memory stats every 5 seconds
     {
@@ -447,6 +514,8 @@ static VPADStatus vpad_prev;
 static bool vpad_first = true;
 
 void App::handle_vpad() {
+    if (state_ == AppState::LOGIN) return;
+
     VPADStatus vpad;
     VPADReadError err = VPAD_READ_SUCCESS;
     VPADRead(VPAD_CHAN_0, &vpad, 1, &err);
@@ -479,6 +548,8 @@ void App::handle_vpad() {
         return;
     }
     vpad_touching_ = false;
+
+    if (!client_) return;
 
     // -- Navigation in GUILD_LIST / CHANNEL_LIST / CHAT --
     const auto &guilds   = client_->state().guilds;
@@ -852,6 +923,9 @@ void App::render() {
     SDL_RenderClear(renderer_);
 
     switch (state_) {
+        case AppState::LOGIN:
+            render_login();
+            break;
         case AppState::LOADING:
             render_loading();
             break;
@@ -869,6 +943,122 @@ void App::render() {
     }
 
     SDL_RenderPresent(renderer_);
+}
+
+// ---- Login / Remote Auth QR screen ------------------------------------------
+
+void App::render_login() {
+    draw_.fill_rect(0, 0, L_W, L_H, COL_BG_DARK);
+
+    // Title bar
+    draw_.fill_rect(0, 0, L_W, HEADER_H, COL_BG_MED);
+    {
+        const char *title = "Login with Discord";
+        int tw = draw_.text_width(title, draw_.font_lg);
+        draw_.draw_text((L_W - tw) / 2, (HEADER_H - draw_.text_height(draw_.font_lg)) / 2,
+                        title, COL_TEXT, draw_.font_lg);
+    }
+    draw_.fill_rect(0, HEADER_H - 1, L_W, 1, COL_BG_DARK);
+
+    if (!remote_auth_) return;
+
+    auto ra = remote_auth_->state();
+
+    if (ra == Discord::RemoteAuthState::CONNECTING) {
+        const char *msg = "Connecting and generating encryption keys...";
+        int tw = draw_.text_width(msg, draw_.font_md);
+        draw_.draw_text((L_W - tw) / 2, L_H / 2 - 8, msg, COL_TEXT_MUTED, draw_.font_md);
+        draw_.fill_rect(0, L_H - 4, L_W, 4, COL_ACCENT);
+        return;
+    }
+
+    if (ra == Discord::RemoteAuthState::FAILED) {
+        std::string emsg = remote_auth_->error_msg();
+        if (emsg.empty()) emsg = "Login failed";
+        int tw = draw_.text_width(emsg, draw_.font_md);
+        draw_.draw_text((L_W - tw) / 2, L_H / 2 - 8, emsg, COL_ERROR, draw_.font_md);
+        const char *hint = "Restart the app to try again";
+        int hw = draw_.text_width(hint, draw_.font_sm);
+        draw_.draw_text((L_W - hw) / 2, L_H / 2 + 10, hint, COL_TEXT_MUTED, draw_.font_sm);
+        return;
+    }
+
+    // WAITING_SCAN or WAITING_CONFIRM
+    std::string fp = remote_auth_->fingerprint();
+
+    // Generate (or regenerate) QR code when fingerprint changes
+    if (!fp.empty() && fp != qr_fingerprint_) {
+        std::string url = "https://discord.com/ra/" + fp;
+        qr_ok_ = qrcodegen_encodeText(url.c_str(), qr_tmp_, qr_buf_,
+                                      qrcodegen_Ecc_MEDIUM,
+                                      qrcodegen_VERSION_MIN, 10,
+                                      qrcodegen_Mask_AUTO, true);
+        qr_fingerprint_ = fp;
+    }
+
+    // QR code rendering — cell size chosen so the code fits in ~140px
+    if (qr_ok_) {
+        int size     = qrcodegen_getSize(qr_buf_);
+        int border   = 4;              // quiet-zone modules
+        int total    = size + border * 2;
+        int cell     = 140 / total;    // pixels per module
+        if (cell < 2) cell = 2;
+        int qr_px    = total * cell;
+        int qr_x     = L_W / 2 - qr_px / 2;
+        int qr_y     = HEADER_H + 10;
+
+        // White background (quiet zone)
+        SDL_SetRenderDrawColor(renderer_, 255, 255, 255, 255);
+        SDL_Rect bg = { qr_x, qr_y, qr_px, qr_px };
+        SDL_RenderFillRect(renderer_, &bg);
+
+        // Dark modules
+        SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 255);
+        for (int my = 0; my < size; my++) {
+            for (int mx = 0; mx < size; mx++) {
+                if (qrcodegen_getModule(qr_buf_, mx, my)) {
+                    SDL_Rect r = {
+                        qr_x + (border + mx) * cell,
+                        qr_y + (border + my) * cell,
+                        cell, cell
+                    };
+                    SDL_RenderFillRect(renderer_, &r);
+                }
+            }
+        }
+
+        int text_y = qr_y + qr_px + 8;
+
+        if (ra == Discord::RemoteAuthState::WAITING_CONFIRM) {
+            std::string tag = remote_auth_->user_tag();
+            std::string msg = tag.empty() ? "Approve on your phone..."
+                                          : "Approve login as " + tag;
+            int tw = draw_.text_width(msg, draw_.font_md);
+            draw_.draw_text((L_W - tw) / 2, text_y, msg, COL_MENTION, draw_.font_md);
+            text_y += draw_.text_height(draw_.font_md) + 4;
+        } else {
+            const char *step1 = "Open Discord on your phone";
+            const char *step2 = "Go to Settings > Scan QR Code";
+            int w1 = draw_.text_width(step1, draw_.font_md);
+            int w2 = draw_.text_width(step2, draw_.font_md);
+            draw_.draw_text((L_W - w1) / 2, text_y, step1, COL_TEXT, draw_.font_md);
+            text_y += draw_.text_height(draw_.font_md) + 3;
+            draw_.draw_text((L_W - w2) / 2, text_y, step2, COL_TEXT_MUTED, draw_.font_sm);
+            text_y += draw_.text_height(draw_.font_sm) + 4;
+        }
+
+        // Show truncated URL for manual entry
+        std::string url_hint = "discord.com/ra/" + fp.substr(0, 16) + "...";
+        int uw = draw_.text_width(url_hint, draw_.font_sm);
+        draw_.draw_text((L_W - uw) / 2, text_y, url_hint, COL_TEXT_MUTED, draw_.font_sm);
+    } else {
+        // QR generation failed (shouldn't happen for our short URL)
+        const char *msg = "Waiting for login URL...";
+        int tw = draw_.text_width(msg, draw_.font_md);
+        draw_.draw_text((L_W - tw) / 2, L_H / 2 - 8, msg, COL_TEXT_MUTED, draw_.font_md);
+    }
+
+    draw_.fill_rect(0, L_H - 4, L_W, 4, COL_ACCENT);
 }
 
 // ---- Loading / error screen --------------------------------------------------

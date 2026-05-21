@@ -4,6 +4,7 @@ A Discord client for the Nintendo Wii U, running as an [Aroma](https://aroma.for
 
 ## Features
 
+- **QR code login** — scan with the Discord mobile app, no manual token needed
 - Real-time messaging via Discord Gateway (WebSocket v10, auto-reconnect)
 - Server and channel list with full `VIEW_CHANNEL` permission filtering
 - Message history with avatars, timestamps, and scroll
@@ -16,6 +17,27 @@ A Discord client for the Nintendo Wii U, running as an [Aroma](https://aroma.for
 
 ## Screenshots
 
+Login screen (no token file needed — scan with Discord mobile):
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                       Login with Discord                                 │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│                  ┌─────────────────────┐                                │
+│                  │ ▓▓▓▓▓▓▓ ▓ ▓▓▓▓▓▓▓ │                                │
+│                  │ ▓     ▓ ▓ ▓     ▓ │                                │
+│                  │ ▓ ▓▓▓ ▓   ▓ ▓▓▓ ▓ │                                │
+│                  │ ▓▓▓▓▓▓▓ ▓ ▓▓▓▓▓▓▓ │                                │
+│                  │   ▓ ▓▓▓▓▓▓▓▓▓ ▓   │                                │
+│                  └─────────────────────┘                                │
+│                                                                          │
+│                  Open Discord on your phone                              │
+│                  Go to Settings > Scan QR Code                          │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+Chat UI:
 ```
 ┌──────┬────────────────┬──────────────────────────────────────────────────┐
 │  S1  │  # general     │  # general                                       │
@@ -85,28 +107,30 @@ docker run --rm -v "$(pwd):/project" devkitpro/devkitppc:latest bash -c \
 
 1. **Copy the app** — place `discord-wiiu.wuhb` at `SD:/wiiu/apps/discord-wiiu/discord-wiiu.wuhb`
 
-2. **Token file** — create `SD:/wiiu/discord_token.txt`
-
-   For a **user account** (personal use):
-   ```
-   YOUR_USER_TOKEN_HERE
-   ```
-   To find your token: open Discord in a browser → F12 → Network tab → send any message → find a request with an `Authorization` header and copy its value.
-
-   For a **bot account**, prefix with `Bot `:
-   ```
-   Bot YOUR_BOT_TOKEN_HERE
-   ```
-
-   > **Warning:** Sharing or committing your token gives full account access. Keep this file off any public repository.
-
-3. **Font file** — place any `.ttf` font at `SD:/wiiu/discord_wiiu/font.ttf`
+2. **Font file** — place any `.ttf` font at `SD:/wiiu/discord_wiiu/font.ttf`
 
    Recommended free fonts with broad Unicode coverage:
    - [Noto Sans](https://fonts.google.com/noto/specimen/Noto+Sans)
    - [DejaVu Sans](https://dejavu-fonts.github.io/)
 
-4. Launch **Discord Wii U** from the Aroma Homebrew Launcher.
+3. Launch **Discord Wii U** from the Aroma Homebrew Launcher.
+
+### Logging in
+
+**QR code login (recommended):** If no token file is present, a QR code appears on screen automatically. Open Discord on your phone → Settings → Scan QR Code. The token is saved to SD card on first login and reused on future launches.
+
+**Manual token (alternative):** Create `SD:/wiiu/discord_token.txt` with your token to skip the QR screen.
+
+For a **user account**:
+```
+YOUR_USER_TOKEN_HERE
+```
+For a **bot account**, prefix with `Bot `:
+```
+Bot YOUR_BOT_TOKEN_HERE
+```
+
+> **Warning:** Sharing or committing your token gives full account access. Keep this file off any public repository.
 
 ### SD card layout
 
@@ -174,14 +198,16 @@ src/
 │   ├── net_mutex.{h,cpp}       Global HTTP mutex (one curl transfer at a time)
 │   ├── rest.{h,cpp}            Discord REST API via libcurl
 │   ├── gateway.{h,cpp}         Discord Gateway WebSocket (curl ≥ 7.86)
+│   ├── remote_auth.{h,cpp}     Remote Auth QR login (RSA-2048, OAEP-SHA256, mbedTLS)
 │   └── client.{h,cpp}         State manager, async worker, event handlers
 └── ui/
     ├── theme.h                 Colors, layout constants, font sizes
     ├── renderer.{h,cpp}        SDL2 drawing primitives + SDL_ttf text
-    └── app.{h,cpp}             Main loop, all UI panels, touch keyboard
+    └── app.{h,cpp}             Main loop, all UI panels, touch keyboard, QR renderer
 
 vendor/
-└── cJSON/                      Embedded JSON parser (MIT)
+├── cJSON/                      Embedded JSON parser (MIT)
+└── qrcodegen/                  QR Code generator — Project Nayuki (MIT)
 ```
 
 ### Threading model
@@ -189,6 +215,7 @@ vendor/
 | Thread | Responsibility |
 |--------|----------------|
 | **Main** | SDL render loop, VPAD input, `client->poll()` |
+| **Remote Auth** | QR login: WebSocket handshake, RSA keygen, token exchange (login only) |
 | **Gateway** | WebSocket recv loop + heartbeat timer |
 | **Channel worker** | Async channel list / message / DM fetches |
 | **Avatar/media worker** | Background PNG downloads and decoding |
@@ -207,4 +234,4 @@ Gateway events are pushed into a thread-safe `EventQueue` and drained on the mai
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Vendor dependency `cJSON` is also MIT.
+MIT — see [LICENSE](LICENSE). Vendor dependencies `cJSON` and `qrcodegen` are also MIT.

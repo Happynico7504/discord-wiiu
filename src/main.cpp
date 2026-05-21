@@ -52,34 +52,17 @@ static int run_app() {
         return 1;
     }
 
+    // Load token from SD card. If absent, App starts in Remote Auth (QR login) mode.
     std::string token = load_token();
-    if (token.empty()) {
-        WHBLogPrint("No Discord token found.");
-        WHBLogPrint("Place your token in /vol/external01/wiiu/discord_token.txt");
-        // Show error on screen for a few seconds via a minimal SDL window
-        SDL_Window *w = SDL_CreateWindow("Discord Wii U",
-            SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 640, 480, 0);
-        if (w) {
-            SDL_Renderer *r = SDL_CreateRenderer(w, -1, 0);
-            if (r) {
-                SDL_SetRenderDrawColor(r, 32, 34, 37, 255);
-                SDL_RenderClear(r);
-                SDL_RenderPresent(r);
-                SDL_Delay(3000);
-                SDL_DestroyRenderer(r);
-            }
-            SDL_DestroyWindow(w);
-        }
-        TTF_Quit();
-        SDL_Quit();
-        return 1;
-    }
+
+    std::shared_ptr<Discord::Client> client;
+    if (!token.empty())
+        client = std::make_shared<Discord::Client>(token);
 
     {
-        auto client = std::make_shared<Discord::Client>(token);
         UI::App app(client);
 
-        if (!client->init()) {
+        if (client && !client->init()) {
             WHBLogPrint("Discord client init failed");
             TTF_Quit();
             SDL_Quit();
@@ -87,7 +70,10 @@ static int run_app() {
         }
 
         app.run();
-        client->shutdown();
+
+        // Shutdown whichever client is active (may have been created during login)
+        auto active = app.get_client();
+        if (active) active->shutdown();
     }
 
     TTF_Quit();
