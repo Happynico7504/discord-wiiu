@@ -51,6 +51,7 @@ public:
     bool is_channels_loading() const { return channels_loading_.load(); }
 
     void request_messages(const std::string &channel_id, int limit = 50);
+    void request_messages_refresh(const std::string &channel_id, int limit = 50);
     bool drain_message_result();
     bool is_messages_loading() const { return msg_loading_.load(); }
 
@@ -89,6 +90,7 @@ private:
     void channel_worker();
     std::atomic<bool>    channels_loading_{false};
     std::atomic<bool>    msg_loading_{false};
+    std::atomic<bool>    msg_soft_refresh_{false};
     std::thread          ch_worker_thread_;
     std::mutex           ch_work_mutex_;
     std::string          ch_pending_guild_;    // "" = none

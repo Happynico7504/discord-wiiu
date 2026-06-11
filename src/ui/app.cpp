@@ -172,7 +172,7 @@ void App::wire_callbacks() {
         client_->fetch_guilds();
     };
     client_->on_message_create = [this](const Discord::Message &) {
-        if (msg_scroll_ == 0) { /* already at bottom */ }
+        if (msg_scroll_ > 0) new_msg_count_++;
     };
     client_->on_typing_start = [this](const Discord::TypingEvent &ev) {
         if (ev.channel_id == client_->state().selected_channel_id)
@@ -387,6 +387,20 @@ void App::update() {
     // Promote completed avatar/media downloads to GPU textures
     drain_avatar_results();
     drain_media_results();
+
+    // Periodic soft-refresh: re-fetch latest messages every 30s when at the
+    // bottom of a channel as a safety net for missed gateway events.
+    if (state_ == AppState::CHAT && msg_scroll_ == 0 &&
+        !client_->is_messages_loading()) {
+        Uint32 now_t = SDL_GetTicks();
+        if (msg_refresh_timer_ == 0) {
+            msg_refresh_timer_ = now_t;
+        } else if (now_t - msg_refresh_timer_ >= 30000) {
+            const std::string &ch = client_->state().selected_channel_id;
+            if (!ch.empty()) client_->request_messages_refresh(ch, 50);
+            msg_refresh_timer_ = now_t;
+        }
+    }
 
     // Log memory stats every 5 seconds
     {
@@ -642,6 +656,8 @@ void App::select_channel(int index) {
 
     state_ = AppState::CHAT;
     msg_scroll_ = 0;
+    new_msg_count_ = 0;
+    msg_refresh_timer_ = 0;
     bool is_heavy = (channels[index].type == Discord::ChannelType::GUILD_FORUM ||
                      channels[index].type == Discord::ChannelType::GUILD_MEDIA);
     client_->request_messages(channels[index].id, is_heavy ? 50 : 100);
@@ -657,6 +673,7 @@ void App::scroll_messages(int delta) {
     const auto &msgs = client_->state().messages;
     if (msgs.empty()) return;
     msg_scroll_ = std::clamp(msg_scroll_ + delta, 0, (int)msgs.size() - 1);
+    if (msg_scroll_ == 0) new_msg_count_ = 0;
 }
 
 void App::send_current_input() {
@@ -668,6 +685,7 @@ void App::send_current_input() {
     input_text_.clear();
     state_ = AppState::CHAT;
     msg_scroll_ = 0;
+    new_msg_count_ = 0;
 }
 
 // ---- avatar loading ----------------------------------------------------------
@@ -1482,12 +1500,21 @@ void App::render_chat() {
 
     SDL_RenderSetClipRect(renderer_, nullptr);
 
-    // Scroll indicator
+    // Scroll indicator — green when new messages arrived, blurple when just scrolled
     if (msg_scroll_ > 0) {
-        std::string scroll_msg = "^ " + std::to_string(msg_scroll_) + " newer messages ^";
+        std::string scroll_msg;
+        SDL_Color pill_col;
+        if (new_msg_count_ > 0) {
+            scroll_msg = "v " + std::to_string(new_msg_count_) + " new message"
+                       + (new_msg_count_ == 1 ? "" : "s") + " v";
+            pill_col = COL_ONLINE;
+        } else {
+            scroll_msg = "^ " + std::to_string(msg_scroll_) + " newer messages ^";
+            pill_col = COL_ACCENT;
+        }
         int sw = draw_.text_width(scroll_msg, draw_.font_sm);
         draw_.fill_rounded_rect(x + (CHAT_W - sw) / 2 - 4,
-                                chat_y + chat_h - 14, sw + 8, 11, 2, COL_ACCENT);
+                                chat_y + chat_h - 14, sw + 8, 11, 2, pill_col);
         draw_.draw_text(x + (CHAT_W - sw) / 2, chat_y + chat_h - 12,
                         scroll_msg, COL_WHITE, draw_.font_sm);
     }

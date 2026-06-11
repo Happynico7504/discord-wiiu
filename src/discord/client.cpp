@@ -7,6 +7,7 @@
 #include <ctime>
 #include <algorithm>
 #include <thread>
+#include <unordered_set>
 #include <sys/stat.h>
 #include <coreinit/time.h>
 #include <coreinit/thread.h>
@@ -1507,11 +1508,22 @@ bool Client::drain_channel_result() {
 }
 
 void Client::request_messages(const std::string &channel_id, int limit) {
+    msg_soft_refresh_.store(false);
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
         state_.selected_channel_id = channel_id;
         state_.messages.clear();
     }
+    msg_loading_.store(true);
+    {
+        std::lock_guard<std::mutex> lock(ch_work_mutex_);
+        ch_pending_channel_   = channel_id;
+        ch_pending_msg_limit_ = limit;
+    }
+}
+
+void Client::request_messages_refresh(const std::string &channel_id, int limit) {
+    msg_soft_refresh_.store(true);
     msg_loading_.store(true);
     {
         std::lock_guard<std::mutex> lock(ch_work_mutex_);
@@ -1596,10 +1608,27 @@ bool Client::drain_message_result() {
             apply_mention_replacements(m.content, mentions);
     }
 
+    bool is_refresh = msg_soft_refresh_.exchange(false);
     {
         std::lock_guard<std::mutex> slock(state_mutex_);
-        if (channel_id == state_.selected_channel_id)
-            state_.messages = std::move(msgs);
+        if (channel_id == state_.selected_channel_id) {
+            if (is_refresh && !state_.messages.empty()) {
+                // Merge: append any message IDs not already present, then re-sort
+                std::unordered_set<std::string> seen;
+                seen.reserve(state_.messages.size());
+                for (const auto &m : state_.messages) seen.insert(m.id);
+                for (auto &m : msgs) {
+                    if (!seen.count(m.id))
+                        state_.messages.push_back(std::move(m));
+                }
+                std::sort(state_.messages.begin(), state_.messages.end(),
+                    [](const Message &a, const Message &b){ return a.id < b.id; });
+                while (state_.messages.size() > 200)
+                    state_.messages.erase(state_.messages.begin());
+            } else {
+                state_.messages = std::move(msgs);
+            }
+        }
     }
     return true;
 }

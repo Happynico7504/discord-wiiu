@@ -119,6 +119,10 @@ private:
     // Typing indicators (user_id -> tick when typing expires)
     std::unordered_map<std::string, Uint32> typing_users_;
 
+    // New-message tracking for auto-update indicator
+    int    new_msg_count_    = 0;   // messages received via gateway while scrolled up
+    Uint32 msg_refresh_timer_ = 0;  // SDL tick when current channel was entered
+
     // Error display
     std::string error_msg_;
 
