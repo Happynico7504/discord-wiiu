@@ -14,6 +14,7 @@
         - Message history with avatars, timestamps, and scroll
         - @mention resolution and attachment display
         - Typing indicators and Direct Messages
+        - Auto-updating message view with new message indicator
         - On-screen touch keyboard (letters, numbers, symbols)
         - Discord dark theme at 1280x720
 
